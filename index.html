@@ -20,7 +20,10 @@
   #map { height: 520px; width: 100%; border-radius: 8px; border: 1px solid #ddd; }
   .pt-label { font-weight: bold; padding: 1px 5px; }
   .legend { margin: 8px 0 0 0; font-size: 14px; }
+  .legend label { display: inline-block; margin: 0 0 0 16px; cursor: pointer; }
+  .legend input { display: inline-block; width: auto; margin: 0 4px 0 0; vertical-align: middle; }
   .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin: 0 4px 0 12px; vertical-align: middle; }
+  .cloudbox { display: inline-block; width: 14px; height: 14px; border-radius: 50%; margin: 0 4px 0 12px; vertical-align: middle; background: rgba(74,74,74,.5); }
   table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #fff; }
   th, td { padding: 8px; border: 1px solid #ddd; text-align: left; }
   th { background: #f2f2f2; }
@@ -50,10 +53,15 @@
     <div class="legend">
       <span class="dot" style="background:#28a745"></span>sucho
       <span class="dot" style="background:#dc3545"></span>hrozí dážď
+      <span class="cloudbox"></span>oblačnosť (tmavšia = viac oblakov)
+      <label><input id="showCloud" type="checkbox" checked>Zobraziť oblačnosť</label>
     </div>
     <table>
       <thead>
-        <tr><th>Čas prejazdu</th><th>GPS súradnice</th><th>Pravdepodobnosť zrážok</th><th>Stav</th></tr>
+        <tr>
+          <th>Čas prejazdu</th><th>GPS súradnice</th><th>Pravdepodobnosť zrážok</th>
+          <th>Oblačnosť</th><th>Stav</th>
+        </tr>
       </thead>
       <tbody id="rows"></tbody>
     </table>
@@ -69,6 +77,8 @@
   const TILE_URL = "https://api.tomtom.com/map/1/tile/basic/main/{z}/{x}/{y}.png?key=" + TOMTOM_KEY;
   const METEO_URL = "https://api.open-meteo.com/v1/forecast";
 
+  const CLOUD_RADIUS_M = 20000;
+
   const $ = (id) => document.getElementById(id);
   const pad = (n) => String(n).padStart(2, "0");
 
@@ -81,6 +91,7 @@
 
   let map = null;
   let mapLayers = [];
+  let cloudGroup = null;
 
   async function getJson(url) {
     const res = await fetch(url);
@@ -112,19 +123,23 @@
 
   async function weatherAt(lat, lon, etaMs) {
     const url = METEO_URL + "?latitude=" + lat + "&longitude=" + lon +
-      "&hourly=precipitation,precipitation_probability&timezone=auto&forecast_days=3";
+      "&hourly=precipitation,precipitation_probability,cloud_cover&timezone=auto&forecast_days=3";
     const m = await getJson(url);
     const off = m.utc_offset_seconds || 0;
     const lp = localParts(etaMs, off);
-    let rainMm = 0, rainProb = 0;
+    let rainMm = 0, rainProb = 0, cloud = 0;
     if (m.hourly && m.hourly.time) {
       const idx = m.hourly.time.indexOf(lp.hourKey);
       if (idx >= 0) {
         rainMm = m.hourly.precipitation[idx] || 0;
         rainProb = m.hourly.precipitation_probability[idx] || 0;
+        cloud = m.hourly.cloud_cover ? (m.hourly.cloud_cover[idx] || 0) : 0;
       }
     }
-    return { time: lp.label, rain_mm: rainMm, rain_prob: rainProb, danger: rainMm > 0 || rainProb > 20 };
+    return {
+      time: lp.label, rain_mm: rainMm, rain_prob: rainProb, cloud: Math.round(cloud),
+      danger: rainMm > 0 || rainProb > 20
+    };
   }
 
   async function analyze(startQ, endQ, departValue) {
@@ -185,7 +200,7 @@
     tbody.innerHTML = "";
     data.report.forEach((r) => {
       const tr = document.createElement("tr");
-      const cells = [r.time, r.lat + ", " + r.lon, r.rain_prob + "%"];
+      const cells = [r.time, r.lat + ", " + r.lon, r.rain_prob + "%", r.cloud + "%"];
       cells.forEach((t) => { const td = document.createElement("td"); td.textContent = t; tr.appendChild(td); });
       const st = document.createElement("td");
       st.className = r.danger ? "bad" : "ok";
@@ -198,9 +213,24 @@
     if (!map) {
       map = L.map("map");
       L.tileLayer(TILE_URL, { maxZoom: 18, attribution: "&copy; TomTom" }).addTo(map);
+      // Vlastná vrstva pre oblačnosť (pod trasou a bodmi)
+      map.createPane("cloudPane");
+      map.getPane("cloudPane").style.zIndex = 350;
+      map.getPane("cloudPane").style.pointerEvents = "none";
     }
     mapLayers.forEach((l) => map.removeLayer(l));
     mapLayers = [];
+    if (cloudGroup) { map.removeLayer(cloudGroup); cloudGroup = null; }
+
+    // Oblačnosť: šedé škvrny, čím tmavšie, tým viac oblakov
+    cloudGroup = L.layerGroup();
+    data.report.forEach((p) => {
+      L.circle([p.lat, p.lon], {
+        pane: "cloudPane", radius: CLOUD_RADIUS_M, stroke: false,
+        fillColor: "#4a4a4a", fillOpacity: (p.cloud / 100) * 0.55, interactive: false
+      }).addTo(cloudGroup);
+    });
+    if ($("showCloud").checked) cloudGroup.addTo(map);
 
     const line = L.polyline(data.route, { color: "#007bff", weight: 5, opacity: 0.85 }).addTo(map);
     mapLayers.push(line);
@@ -217,6 +247,7 @@
       const b = document.createElement("b"); b.textContent = p.time; box.appendChild(b);
       [ "Pravdepodobnosť zrážok: " + p.rain_prob + "%",
         "Zrážky: " + p.rain_mm + " mm",
+        "Oblačnosť: " + p.cloud + "%",
         p.lat + ", " + p.lon ].forEach((t) => {
         box.appendChild(document.createElement("br"));
         box.appendChild(document.createTextNode(t));
@@ -225,6 +256,12 @@
       mapLayers.push(marker);
     });
   }
+
+  $("showCloud").addEventListener("change", () => {
+    if (!map || !cloudGroup) return;
+    if ($("showCloud").checked) cloudGroup.addTo(map);
+    else map.removeLayer(cloudGroup);
+  });
 
   $("form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
