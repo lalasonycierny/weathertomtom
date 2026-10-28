@@ -1,0 +1,49 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build site (insert TomTom key from secret)
+        env:
+          TOMTOM_KEY: ${{ secrets.TOMTOM_API_KEY2 }}
+        run: |
+          if [ -z "$TOMTOM_KEY" ]; then
+            echo "Secret TOMTOM_API_KEY2 is not set in Actions secrets" >&2
+            exit 1
+          fi
+          mkdir site
+          cp index.html site/index.html
+          sed -i "s|__TOMTOM_KEY__|${TOMTOM_KEY}|g" site/index.html
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
