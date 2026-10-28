@@ -67,7 +67,7 @@
       <thead>
         <tr>
           <th>Čas prejazdu</th><th>GPS súradnice</th><th>Pravdepodobnosť zrážok</th>
-          <th>Oblačnosť</th><th>Stav</th>
+          <th>Teplota</th><th>Oblačnosť</th><th>Stav</th>
         </tr>
       </thead>
       <tbody id="rows"></tbody>
@@ -92,6 +92,7 @@
 
   const $ = (id) => document.getElementById(id);
   const pad = (n) => String(n).padStart(2, "0");
+  const fmtTemp = (t) => (t === null || t === undefined) ? "–" : t + " °C";
 
   // Predvolený čas odchodu = teraz (zaokrúhlený na minútu, v čase prehliadača)
   (function setDefaultDeparture() {
@@ -135,21 +136,25 @@
 
   async function weatherAt(lat, lon, etaMs) {
     const url = METEO_URL + "?latitude=" + lat + "&longitude=" + lon +
-      "&hourly=precipitation,precipitation_probability,cloud_cover&timezone=auto&forecast_days=3";
+      "&hourly=precipitation,precipitation_probability,cloud_cover,temperature_2m&timezone=auto&forecast_days=3";
     const m = await getJson(url);
     const off = m.utc_offset_seconds || 0;
     const lp = localParts(etaMs, off);
-    let rainMm = 0, rainProb = 0, cloud = 0;
+    let rainMm = 0, rainProb = 0, cloud = 0, temp = null;
     if (m.hourly && m.hourly.time) {
       const idx = m.hourly.time.indexOf(lp.hourKey);
       if (idx >= 0) {
         rainMm = m.hourly.precipitation[idx] || 0;
         rainProb = m.hourly.precipitation_probability[idx] || 0;
         cloud = m.hourly.cloud_cover ? (m.hourly.cloud_cover[idx] || 0) : 0;
+        if (m.hourly.temperature_2m && m.hourly.temperature_2m[idx] !== null &&
+            m.hourly.temperature_2m[idx] !== undefined) {
+          temp = Math.round(m.hourly.temperature_2m[idx] * 10) / 10;
+        }
       }
     }
     return {
-      time: lp.label, rain_mm: rainMm, rain_prob: rainProb, cloud: Math.round(cloud),
+      time: lp.label, rain_mm: rainMm, rain_prob: rainProb, cloud: Math.round(cloud), temp: temp,
       danger: rainMm > 0 || rainProb > 20
     };
   }
@@ -234,7 +239,7 @@
     tbody.innerHTML = "";
     data.report.forEach((r) => {
       const tr = document.createElement("tr");
-      const cells = [r.time, r.lat + ", " + r.lon, r.rain_prob + "%", r.cloud + "%"];
+      const cells = [r.time, r.lat + ", " + r.lon, r.rain_prob + "%", fmtTemp(r.temp), r.cloud + "%"];
       cells.forEach((t) => { const td = document.createElement("td"); td.textContent = t; tr.appendChild(td); });
       const st = document.createElement("td");
       st.className = r.danger ? "bad" : "ok";
@@ -268,11 +273,12 @@
         radius: 9, color: "#ffffff", weight: 2,
         fillColor: p.danger ? "#dc3545" : "#28a745", fillOpacity: 1
       }).addTo(map);
-      marker.bindTooltip(p.time, { permanent: true, direction: "top", offset: [0, -8], className: "pt-label" });
+      marker.bindTooltip(p.time + " · " + fmtTemp(p.temp), { permanent: true, direction: "top", offset: [0, -8], className: "pt-label" });
       const box = document.createElement("div");
       const b = document.createElement("b"); b.textContent = p.time; box.appendChild(b);
       [ "Pravdepodobnosť zrážok: " + p.rain_prob + "%",
         "Zrážky: " + p.rain_mm + " mm",
+        "Teplota: " + fmtTemp(p.temp),
         "Oblačnosť (predpoveď): " + p.cloud + "%",
         p.lat + ", " + p.lon ].forEach((t) => {
         box.appendChild(document.createElement("br"));
