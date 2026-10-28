@@ -17,13 +17,14 @@
   button:disabled { background: #7aa7d9; cursor: wait; }
   #error { color: #b02a37; margin-top: 16px; font-weight: bold; white-space: pre-wrap; }
   #result { margin-top: 24px; display: none; }
-  #map { height: 520px; width: 100%; border-radius: 8px; border: 1px solid #ddd; }
+  #map { height: 560px; width: 100%; border-radius: 8px; border: 1px solid #ddd; }
   .pt-label { font-weight: bold; padding: 1px 5px; }
-  .legend { margin: 8px 0 0 0; font-size: 14px; }
-  .legend label { display: inline-block; margin: 0 0 0 16px; cursor: pointer; }
-  .legend input { display: inline-block; width: auto; margin: 0 4px 0 0; vertical-align: middle; }
-  .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin: 0 4px 0 12px; vertical-align: middle; }
-  .cloudbox { display: inline-block; width: 14px; height: 14px; border-radius: 50%; margin: 0 4px 0 12px; vertical-align: middle; background: rgba(74,74,74,.5); }
+  .legend { margin: 10px 0 0 0; font-size: 14px; line-height: 2; }
+  .legend label { display: inline-block; margin: 0 14px 0 0; cursor: pointer; font-size: 14px; }
+  .legend input[type=checkbox] { display: inline-block; width: auto; margin: 0 4px 0 0; padding: 0; vertical-align: middle; }
+  .legend input[type=range] { display: inline-block; width: 110px; margin: 0 4px; padding: 0; vertical-align: middle; border: none; }
+  .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin: 0 4px 0 0; vertical-align: middle; }
+  .note { font-size: 13px; color: #555; margin-top: 6px; }
   table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #fff; }
   th, td { padding: 8px; border: 1px solid #ddd; text-align: left; }
   th { background: #f2f2f2; }
@@ -51,10 +52,16 @@
     <p id="meta"></p>
     <div id="map"></div>
     <div class="legend">
-      <span class="dot" style="background:#28a745"></span>sucho
+      <span class="dot" style="background:#28a745"></span>sucho &nbsp;
       <span class="dot" style="background:#dc3545"></span>hrozí dážď
-      <span class="cloudbox"></span>oblačnosť (tmavšia = viac oblakov)
-      <label><input id="showCloud" type="checkbox" checked>Zobraziť oblačnosť</label>
+      <br>
+      <label><input id="showSat" type="checkbox" checked>Satelitná snímka oblakov</label>
+      <label>priehľadnosť <input id="satOpacity" type="range" min="10" max="100" value="60"></label>
+      <label><input id="showCloud" type="checkbox">Predpoveď oblačnosti v bodoch trasy</label>
+    </div>
+    <div class="note">
+      Satelitná vrstva je infračervená snímka Meteosat (EUMETSAT, obnovuje sa približne každých 10 minút):
+      svetlejšie plochy = chladnejšie, vyššie oblaky. Ukazuje aktuálny stav, nie predpoveď na čas prejazdu.
     </div>
     <table>
       <thead>
@@ -77,6 +84,10 @@
   const TILE_URL = "https://api.tomtom.com/map/1/tile/basic/main/{z}/{x}/{y}.png?key=" + TOMTOM_KEY;
   const METEO_URL = "https://api.open-meteo.com/v1/forecast";
 
+  // Satelitná vrstva EUMETSAT (EUMETView WMS, bez kľúča): IR 10.5 µm, Meteosat Third Generation
+  const SAT_WMS_URL = "https://view.eumetsat.int/geoserver/wms";
+  const SAT_WMS_LAYER = "mtg_fd:ir105_hrfi";
+
   const CLOUD_RADIUS_M = 20000;
 
   const $ = (id) => document.getElementById(id);
@@ -90,6 +101,7 @@
   })();
 
   let map = null;
+  let satLayer = null;
   let mapLayers = [];
   let cloudGroup = null;
 
@@ -190,6 +202,28 @@
     };
   }
 
+  function initMap() {
+    map = L.map("map");
+    L.tileLayer(TILE_URL, { maxZoom: 18, attribution: "&copy; TomTom" }).addTo(map);
+
+    // Plošná vrstva oblakov: satelitná snímka z EUMETSAT cez WMS
+    satLayer = L.tileLayer.wms(SAT_WMS_URL, {
+      layers: SAT_WMS_LAYER,
+      version: "1.3.0",
+      format: "image/png",
+      transparent: true,
+      opacity: Number($("satOpacity").value) / 100,
+      zIndex: 10,
+      attribution: "Satelit: &copy; EUMETSAT"
+    });
+    if ($("showSat").checked) satLayer.addTo(map);
+
+    // Vlastná vrstva pre bodovú predpoveď oblačnosti (pod trasou a bodmi)
+    map.createPane("cloudPane");
+    map.getPane("cloudPane").style.zIndex = 350;
+    map.getPane("cloudPane").style.pointerEvents = "none";
+  }
+
   function render(data) {
     $("title").textContent = "Analýza trasy: " + data.start + " → " + data.end;
     $("meta").textContent = "Celkový čas jazdy: " + data.duration;
@@ -209,20 +243,12 @@
       tbody.appendChild(tr);
     });
 
-    // Mapa
-    if (!map) {
-      map = L.map("map");
-      L.tileLayer(TILE_URL, { maxZoom: 18, attribution: "&copy; TomTom" }).addTo(map);
-      // Vlastná vrstva pre oblačnosť (pod trasou a bodmi)
-      map.createPane("cloudPane");
-      map.getPane("cloudPane").style.zIndex = 350;
-      map.getPane("cloudPane").style.pointerEvents = "none";
-    }
+    if (!map) initMap();
     mapLayers.forEach((l) => map.removeLayer(l));
     mapLayers = [];
     if (cloudGroup) { map.removeLayer(cloudGroup); cloudGroup = null; }
 
-    // Oblačnosť: šedé škvrny, čím tmavšie, tým viac oblakov
+    // Bodová predpoveď oblačnosti: šedé škvrny, čím tmavšie, tým viac oblakov
     cloudGroup = L.layerGroup();
     data.report.forEach((p) => {
       L.circle([p.lat, p.lon], {
@@ -247,7 +273,7 @@
       const b = document.createElement("b"); b.textContent = p.time; box.appendChild(b);
       [ "Pravdepodobnosť zrážok: " + p.rain_prob + "%",
         "Zrážky: " + p.rain_mm + " mm",
-        "Oblačnosť: " + p.cloud + "%",
+        "Oblačnosť (predpoveď): " + p.cloud + "%",
         p.lat + ", " + p.lon ].forEach((t) => {
         box.appendChild(document.createElement("br"));
         box.appendChild(document.createTextNode(t));
@@ -256,6 +282,16 @@
       mapLayers.push(marker);
     });
   }
+
+  $("showSat").addEventListener("change", () => {
+    if (!map || !satLayer) return;
+    if ($("showSat").checked) satLayer.addTo(map);
+    else map.removeLayer(satLayer);
+  });
+
+  $("satOpacity").addEventListener("input", () => {
+    if (satLayer) satLayer.setOpacity(Number($("satOpacity").value) / 100);
+  });
 
   $("showCloud").addEventListener("change", () => {
     if (!map || !cloudGroup) return;
