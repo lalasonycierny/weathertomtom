@@ -9,9 +9,14 @@
 <style>
   body { font-family: Arial, sans-serif; margin: 0; padding: 24px; background: #f4f4f9; color: #222; }
   .wrap { max-width: 1000px; margin: 0 auto; }
-  form { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,.1); max-width: 420px; }
+  form { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,.1); max-width: 560px; }
+  form .chk { display: inline-block; margin: 4px 14px 4px 0; font-size: 14px; }
+  form .chk input { display: inline-block; width: auto; margin: 0 4px 0 0; padding: 0; vertical-align: middle; }
+  details { margin-top: 10px; font-size: 14px; } summary { cursor: pointer; }
+  #alts button { display: inline-block; width: auto; margin: 10px 8px 0 0; padding: 8px 12px; background: #e9ecef; color: #222; }
+  #alts button.active { background: #007bff; color: #fff; }
   label { display: block; margin-top: 10px; font-size: 14px; }
-  input, button { display: block; width: 100%; margin: 6px 0; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 15px; }
+  input, select, button { display: block; width: 100%; margin: 6px 0; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 15px; }
   button { background: #007bff; color: #fff; border: none; cursor: pointer; margin-top: 14px; }
   button:hover { background: #0056b3; }
   button:disabled { background: #7aa7d9; cursor: wait; }
@@ -42,6 +47,52 @@
     <input id="end" type="text" value="Košice" required>
     <label for="depart">Čas odchodu:</label>
     <input id="depart" type="datetime-local" required>
+    <label for="timeMode">Zadaný čas je:</label>
+    <select id="timeMode"><option value="departAt">čas odchodu</option><option value="arriveAt">čas príchodu</option></select>
+    <label for="travelMode">Spôsob dopravy:</label>
+    <select id="travelMode">
+      <option value="car">auto</option><option value="truck">nákladné auto</option><option value="taxi">taxi</option>
+      <option value="bus">autobus</option><option value="van">dodávka</option><option value="motorcycle">motorka</option>
+      <option value="bicycle">bicykel</option><option value="pedestrian">chôdza</option>
+    </select>
+    <label for="routeType">Typ trasy:</label>
+    <select id="routeType">
+      <option value="fastest">najrýchlejšia</option><option value="shortest">najkratšia</option>
+      <option value="short">krátka (vyvážená)</option><option value="eco">ekonomická</option>
+      <option value="thrilling">zážitková (kľukatá)</option>
+    </select>
+    <div id="thrillBox" style="display:none">
+      <label for="hilliness">Kopcovitosť:</label>
+      <select id="hilliness"><option>low</option><option selected>normal</option><option>high</option></select>
+      <label for="windingness">Kľukatosť:</label>
+      <select id="windingness"><option>low</option><option selected>normal</option><option>high</option></select>
+    </div>
+    <label for="maxAlt">Alternatívne trasy:</label>
+    <select id="maxAlt"><option value="0">žiadne</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
+    <label class="chk"><input id="traffic" type="checkbox" checked>Zohľadniť dopravu</label>
+    <label>Vyhnúť sa:</label>
+    <div>
+      <label class="chk"><input class="av" type="checkbox" value="tollRoads">spoplatneným cestám</label>
+      <label class="chk"><input class="av" type="checkbox" value="motorways">diaľniciam</label>
+      <label class="chk"><input class="av" type="checkbox" value="ferries">trajektom</label>
+      <label class="chk"><input class="av" type="checkbox" value="unpavedRoads">nespevneným cestám</label>
+      <label class="chk"><input class="av" type="checkbox" value="carpools">pruhom pre viac osôb</label>
+      <label class="chk"><input class="av" type="checkbox" value="alreadyUsedRoads">opakovane použitým cestám</label>
+      <label class="chk"><input class="av" type="checkbox" value="borderCrossings">hraničným priechodom</label>
+      <label class="chk"><input class="av" type="checkbox" value="tunnels">tunelom</label>
+      <label class="chk"><input class="av" type="checkbox" value="carTrains">autovlakom</label>
+      <label class="chk"><input class="av" type="checkbox" value="lowEmissionZones">zónam s nízkymi emisiami</label>
+    </div>
+    <details>
+      <summary>Parametre vozidla (voliteľné)</summary>
+      <label for="vMaxSpeed">Max. rýchlosť (km/h):</label><input id="vMaxSpeed" type="number" min="0">
+      <label for="vWeight">Hmotnosť (kg):</label><input id="vWeight" type="number" min="0">
+      <label for="vAxle">Zaťaženie nápravy (kg):</label><input id="vAxle" type="number" min="0">
+      <label for="vLength">Dĺžka (m):</label><input id="vLength" type="number" min="0" step="0.1">
+      <label for="vWidth">Šírka (m):</label><input id="vWidth" type="number" min="0" step="0.1">
+      <label for="vHeight">Výška (m):</label><input id="vHeight" type="number" min="0" step="0.1">
+      <label class="chk"><input id="vCommercial" type="checkbox">Komerčné použitie</label>
+    </details>
     <button id="go" type="submit">Skontrolovať trasu</button>
   </form>
 
@@ -50,6 +101,7 @@
   <div id="result">
     <h2 id="title"></h2>
     <p id="meta"></p>
+    <div id="alts"></div>
     <div id="map"></div>
     <div class="legend">
       <span class="dot" style="background:#28a745"></span>sucho &nbsp;
@@ -159,52 +211,103 @@
     };
   }
 
-  async function analyze(startQ, endQ, departValue) {
+  const VEHICLE_PARAMS = [["vMaxSpeed", "vehicleMaxSpeed"], ["vWeight", "vehicleWeight"], ["vAxle", "vehicleAxleWeight"],
+    ["vLength", "vehicleLength"], ["vWidth", "vehicleWidth"], ["vHeight", "vehicleHeight"]];
+
+  function routeParams(departValue) {
+    const p = new URLSearchParams();
+    p.set("key", TOMTOM_KEY);
+    p.set($("timeMode").value, departValue + ":00");
+    p.set("routeType", $("routeType").value);
+    p.set("travelMode", $("travelMode").value);
+    p.set("traffic", $("traffic").checked ? "true" : "false");
+    if ($("maxAlt").value !== "0") p.set("maxAlternatives", $("maxAlt").value);
+    document.querySelectorAll(".av:checked").forEach((c) => p.append("avoid", c.value));
+    if ($("routeType").value === "thrilling") {
+      p.set("hilliness", $("hilliness").value);
+      p.set("windingness", $("windingness").value);
+    }
+    VEHICLE_PARAMS.forEach((v) => { const val = $(v[0]).value.trim(); if (val) p.set(v[1], val); });
+    if ($("vCommercial").checked) p.set("vehicleCommercial", "true");
+    return p;
+  }
+
+  async function fetchRoutes(startQ, endQ, departValue) {
     const startData = await geocode(startQ);
     const endData = await geocode(endQ);
     const sp = startData.position, ep = endData.position;
+    const url = ROUTE_URL + "/" + sp.lat + "," + sp.lon + ":" + ep.lat + "," + ep.lon +
+      "/json?" + routeParams(departValue).toString();
+    const res = await getJson(url);
+    if (!res.routes || !res.routes.length) throw new Error("TomTom nedokázal naplánovať trasu.");
+    const routes = res.routes.map((r) => {
+      const dep = Date.parse(r.summary.departureTime);
+      return {
+        points: [].concat.apply([], r.legs.map((l) => l.points)),
+        sec: r.summary.travelTimeInSeconds,
+        meters: r.summary.lengthInMeters,
+        departMs: isNaN(dep) ? new Date(departValue).getTime() : dep
+      };
+    });
+    return {
+      start: (startData.address && startData.address.freeformAddress) || startQ,
+      end: (endData.address && endData.address.freeformAddress) || endQ,
+      end_pos: ep, routes: routes, cache: {}
+    };
+  }
 
-    const departMs = new Date(departValue).getTime();
-    const routeUrl = ROUTE_URL + "/" + sp.lat + "," + sp.lon + ":" + ep.lat + "," + ep.lon +
-      "/json?key=" + encodeURIComponent(TOMTOM_KEY) +
-      "&departAt=" + encodeURIComponent(departValue + ":00") +
-      "&routeType=fastest&travelMode=car";
-    const route = await getJson(routeUrl);
-    if (!route.routes || !route.routes.length) throw new Error("TomTom nedokázal naplánovať trasu.");
-
-    const leg = route.routes[0].legs[0];
-    const points = leg.points;
-    const totalSec = leg.summary.travelTimeInSeconds;
-
+  async function weatherForRoute(r, endPos) {
+    const points = r.points;
     const routeLine = points.map((p) => [p.latitude, p.longitude]);
-
     // Približne 8 kontrolných bodov + cieľ
     const step = Math.max(1, Math.floor(points.length / 8));
     const sampled = [];
     let lastIdx = 0;
     for (let i = 0; i < points.length; i += step) {
-      const progress = i / points.length;
       sampled.push({ lat: points[i].latitude, lon: points[i].longitude,
-        etaMs: departMs + Math.floor(totalSec * progress) * 1000 });
+        etaMs: r.departMs + Math.floor(r.sec * (i / points.length)) * 1000 });
       lastIdx = i;
     }
     if (sampled.length > 1 && (points.length - 1 - lastIdx) < step / 2) sampled.pop();
-    sampled.push({ lat: ep.lat, lon: ep.lon, etaMs: departMs + totalSec * 1000 });
+    sampled.push({ lat: endPos.lat, lon: endPos.lon, etaMs: r.departMs + r.sec * 1000 });
 
     const weather = await Promise.all(sampled.map((s) => weatherAt(s.lat, s.lon, s.etaMs)));
     const report = sampled.map((s, i) => Object.assign({
       lat: Math.round(s.lat * 1e5) / 1e5,
       lon: Math.round(s.lon * 1e5) / 1e5
     }, weather[i]));
+    return { route: routeLine, report: report };
+  }
 
-    const h = Math.floor(totalSec / 3600), mi = Math.floor((totalSec % 3600) / 60);
-    return {
-      start: (startData.address && startData.address.freeformAddress) || startQ,
-      end: (endData.address && endData.address.freeformAddress) || endQ,
-      duration: h + " h " + pad(mi) + " min",
-      route: routeLine,
-      report: report
-    };
+  function describeRoute(r) {
+    const h = Math.floor(r.sec / 3600), mi = Math.floor((r.sec % 3600) / 60);
+    return h + " h " + pad(mi) + " min, " + Math.round(r.meters / 1000) + " km";
+  }
+
+  let current = null;
+
+  async function selectRoute(i) {
+    const r = current.routes[i];
+    if (!current.cache[i]) current.cache[i] = await weatherForRoute(r, current.end_pos);
+    const c = current.cache[i];
+    const alts = $("alts");
+    alts.innerHTML = "";
+    if (current.routes.length > 1) {
+      current.routes.forEach((rt, k) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = k === i ? "active" : "";
+        b.textContent = "Trasa " + (k + 1) + ": " + describeRoute(rt);
+        b.addEventListener("click", () => selectRoute(k).catch((e) => { $("error").textContent = e.message; }));
+        alts.appendChild(b);
+      });
+    }
+    const others = [];
+    current.routes.forEach((rt, k) => {
+      if (k !== i) others.push({ idx: k, route: rt.points.map((p) => [p.latitude, p.longitude]) });
+    });
+    render({ start: current.start, end: current.end, duration: describeRoute(r),
+      route: c.route, report: c.report, others: others });
   }
 
   function initMap() {
@@ -265,6 +368,11 @@
 
     const line = L.polyline(data.route, { color: "#007bff", weight: 5, opacity: 0.85 }).addTo(map);
     mapLayers.push(line);
+    (data.others || []).forEach((o) => {
+      const l = L.polyline(o.route, { color: "#888", weight: 4, opacity: 0.7, dashArray: "6 8" }).addTo(map);
+      l.on("click", () => selectRoute(o.idx).catch((e) => { $("error").textContent = e.message; }));
+      mapLayers.push(l);
+    });
     map.invalidateSize();
     map.fitBounds(line.getBounds(), { padding: [30, 30] });
 
@@ -288,6 +396,10 @@
       mapLayers.push(marker);
     });
   }
+
+  $("routeType").addEventListener("change", () => {
+    $("thrillBox").style.display = $("routeType").value === "thrilling" ? "block" : "none";
+  });
 
   $("showSat").addEventListener("change", () => {
     if (!map || !satLayer) return;
@@ -316,8 +428,8 @@
     btn.disabled = true;
     btn.textContent = "Počítam...";
     try {
-      const data = await analyze($("start").value.trim(), $("end").value.trim(), $("depart").value);
-      render(data);
+      current = await fetchRoutes($("start").value.trim(), $("end").value.trim(), $("depart").value);
+      await selectRoute(0);
     } catch (e) {
       $("result").style.display = "none";
       $("error").textContent = e.message || String(e);
