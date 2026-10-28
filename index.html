@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meteo Trasa</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<style>
+  body { font-family: Arial, sans-serif; margin: 0; padding: 24px; background: #f4f4f9; color: #222; }
+  .wrap { max-width: 1000px; margin: 0 auto; }
+  form { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,.1); max-width: 420px; }
+  label { display: block; margin-top: 10px; font-size: 14px; }
+  input, button { display: block; width: 100%; margin: 6px 0; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 15px; }
+  button { background: #007bff; color: #fff; border: none; cursor: pointer; margin-top: 14px; }
+  button:hover { background: #0056b3; }
+  button:disabled { background: #7aa7d9; cursor: wait; }
+  #error { color: #b02a37; margin-top: 16px; font-weight: bold; white-space: pre-wrap; }
+  #result { margin-top: 24px; display: none; }
+  #map { height: 520px; width: 100%; border-radius: 8px; border: 1px solid #ddd; }
+  .pt-label { font-weight: bold; padding: 1px 5px; }
+  .legend { margin: 8px 0 0 0; font-size: 14px; }
+  .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin: 0 4px 0 12px; vertical-align: middle; }
+  table { width: 100%; border-collapse: collapse; margin-top: 20px; background: #fff; }
+  th, td { padding: 8px; border: 1px solid #ddd; text-align: left; }
+  th { background: #f2f2f2; }
+  .ok { color: #28a745; font-weight: bold; }
+  .bad { color: #dc3545; font-weight: bold; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h2>Plánovač trasy s kontrolou dažďa</h2>
+  <form id="form">
+    <label for="start">Odkiaľ:</label>
+    <input id="start" type="text" value="Bratislava" required>
+    <label for="end">Kam:</label>
+    <input id="end" type="text" value="Košice" required>
+    <label for="depart">Čas odchodu:</label>
+    <input id="depart" type="datetime-local" required>
+    <button id="go" type="submit">Skontrolovať trasu</button>
+  </form>
+
+  <div id="error"></div>
+
+  <div id="result">
+    <h2 id="title"></h2>
+    <p id="meta"></p>
+    <div id="map"></div>
+    <div class="legend">
+      <span class="dot" style="background:#28a745"></span>sucho
+      <span class="dot" style="background:#dc3545"></span>hrozí dážď
+    </div>
+    <table>
+      <thead>
+        <tr><th>Čas prejazdu</th><th>GPS súradnice</th><th>Pravdepodobnosť zrážok</th><th>Stav</th></tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  // Kľúč sa pri nasadení na GitHub Pages doplní z GitHub secret (TOMTOM_API_KEY2)
+  const TOMTOM_KEY = "__TOMTOM_KEY__";
+
+  const GEO_URL = "https://api.tomtom.com/search/2/geocode";
+  const ROUTE_URL = "https://api.tomtom.com/routing/1/calculateRoute";
+  const TILE_URL = "https://api.tomtom.com/map/1/tile/basic/main/{z}/{x}/{y}.png?key=" + TOMTOM_KEY;
+  const METEO_URL = "https://api.open-meteo.com/v1/forecast";
+
+  const $ = (id) => document.getElementById(id);
+  const pad = (n) => String(n).padStart(2, "0");
+
+  // Predvolený čas odchodu = teraz (zaokrúhlený na minútu, v čase prehliadača)
+  (function setDefaultDeparture() {
+    const d = new Date();
+    $("depart").value = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+      "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  })();
+
+  let map = null;
+  let mapLayers = [];
+
+  async function getJson(url) {
+    const res = await fetch(url);
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* ignoruj */ }
+    if (!res.ok) {
+      const msg = data && (data.detailedError && data.detailedError.message || data.error || data.reason);
+      throw new Error("Chyba " + res.status + (msg ? ": " + msg : "") + " (" + url.split("?")[0] + ")");
+    }
+    return data;
+  }
+
+  async function geocode(query) {
+    const data = await getJson(GEO_URL + "/" + encodeURIComponent(query) + ".json?key=" +
+      encodeURIComponent(TOMTOM_KEY) + "&limit=1");
+    if (!data.results || !data.results.length) throw new Error("Adresa sa nenašla: " + query);
+    return data.results[0];
+  }
+
+  // Čas bodu v jeho miestnej zóne (podľa utc_offset_seconds z Open-Meteo)
+  function localParts(instantMs, offsetSec) {
+    const d = new Date(instantMs + offsetSec * 1000);
+    return {
+      hourKey: d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate()) +
+        "T" + pad(d.getUTCHours()) + ":00",
+      label: pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes())
+    };
+  }
+
+  async function weatherAt(lat, lon, etaMs) {
+    const url = METEO_URL + "?latitude=" + lat + "&longitude=" + lon +
+      "&hourly=precipitation,precipitation_probability&timezone=auto&forecast_days=3";
+    const m = await getJson(url);
+    const off = m.utc_offset_seconds || 0;
+    const lp = localParts(etaMs, off);
+    let rainMm = 0, rainProb = 0;
+    if (m.hourly && m.hourly.time) {
+      const idx = m.hourly.time.indexOf(lp.hourKey);
+      if (idx >= 0) {
+        rainMm = m.hourly.precipitation[idx] || 0;
+        rainProb = m.hourly.precipitation_probability[idx] || 0;
+      }
+    }
+    return { time: lp.label, rain_mm: rainMm, rain_prob: rainProb, danger: rainMm > 0 || rainProb > 20 };
+  }
+
+  async function analyze(startQ, endQ, departValue) {
+    const startData = await geocode(startQ);
+    const endData = await geocode(endQ);
+    const sp = startData.position, ep = endData.position;
+
+    const departMs = new Date(departValue).getTime();
+    const routeUrl = ROUTE_URL + "/" + sp.lat + "," + sp.lon + ":" + ep.lat + "," + ep.lon +
+      "/json?key=" + encodeURIComponent(TOMTOM_KEY) +
+      "&departAt=" + encodeURIComponent(departValue + ":00") +
+      "&routeType=fastest&travelMode=car";
+    const route = await getJson(routeUrl);
+    if (!route.routes || !route.routes.length) throw new Error("TomTom nedokázal naplánovať trasu.");
+
+    const leg = route.routes[0].legs[0];
+    const points = leg.points;
+    const totalSec = leg.summary.travelTimeInSeconds;
+
+    const routeLine = points.map((p) => [p.latitude, p.longitude]);
+
+    // Približne 8 kontrolných bodov + cieľ
+    const step = Math.max(1, Math.floor(points.length / 8));
+    const sampled = [];
+    let lastIdx = 0;
+    for (let i = 0; i < points.length; i += step) {
+      const progress = i / points.length;
+      sampled.push({ lat: points[i].latitude, lon: points[i].longitude,
+        etaMs: departMs + Math.floor(totalSec * progress) * 1000 });
+      lastIdx = i;
+    }
+    if (sampled.length > 1 && (points.length - 1 - lastIdx) < step / 2) sampled.pop();
+    sampled.push({ lat: ep.lat, lon: ep.lon, etaMs: departMs + totalSec * 1000 });
+
+    const weather = await Promise.all(sampled.map((s) => weatherAt(s.lat, s.lon, s.etaMs)));
+    const report = sampled.map((s, i) => Object.assign({
+      lat: Math.round(s.lat * 1e5) / 1e5,
+      lon: Math.round(s.lon * 1e5) / 1e5
+    }, weather[i]));
+
+    const h = Math.floor(totalSec / 3600), mi = Math.floor((totalSec % 3600) / 60);
+    return {
+      start: (startData.address && startData.address.freeformAddress) || startQ,
+      end: (endData.address && endData.address.freeformAddress) || endQ,
+      duration: h + " h " + pad(mi) + " min",
+      route: routeLine,
+      report: report
+    };
+  }
+
+  function render(data) {
+    $("title").textContent = "Analýza trasy: " + data.start + " → " + data.end;
+    $("meta").textContent = "Celkový čas jazdy: " + data.duration;
+    $("result").style.display = "block";
+
+    // Tabuľka (textContent, aby sa nič nevkladalo ako HTML)
+    const tbody = $("rows");
+    tbody.innerHTML = "";
+    data.report.forEach((r) => {
+      const tr = document.createElement("tr");
+      const cells = [r.time, r.lat + ", " + r.lon, r.rain_prob + "%"];
+      cells.forEach((t) => { const td = document.createElement("td"); td.textContent = t; tr.appendChild(td); });
+      const st = document.createElement("td");
+      st.className = r.danger ? "bad" : "ok";
+      st.textContent = r.danger ? "⚠️ Hrozí dážď (" + r.rain_mm + " mm)" : "✅ Sucho";
+      tr.appendChild(st);
+      tbody.appendChild(tr);
+    });
+
+    // Mapa
+    if (!map) {
+      map = L.map("map");
+      L.tileLayer(TILE_URL, { maxZoom: 18, attribution: "&copy; TomTom" }).addTo(map);
+    }
+    mapLayers.forEach((l) => map.removeLayer(l));
+    mapLayers = [];
+
+    const line = L.polyline(data.route, { color: "#007bff", weight: 5, opacity: 0.85 }).addTo(map);
+    mapLayers.push(line);
+    map.invalidateSize();
+    map.fitBounds(line.getBounds(), { padding: [30, 30] });
+
+    data.report.forEach((p) => {
+      const marker = L.circleMarker([p.lat, p.lon], {
+        radius: 9, color: "#ffffff", weight: 2,
+        fillColor: p.danger ? "#dc3545" : "#28a745", fillOpacity: 1
+      }).addTo(map);
+      marker.bindTooltip(p.time, { permanent: true, direction: "top", offset: [0, -8], className: "pt-label" });
+      const box = document.createElement("div");
+      const b = document.createElement("b"); b.textContent = p.time; box.appendChild(b);
+      [ "Pravdepodobnosť zrážok: " + p.rain_prob + "%",
+        "Zrážky: " + p.rain_mm + " mm",
+        p.lat + ", " + p.lon ].forEach((t) => {
+        box.appendChild(document.createElement("br"));
+        box.appendChild(document.createTextNode(t));
+      });
+      marker.bindPopup(box);
+      mapLayers.push(marker);
+    });
+  }
+
+  $("form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    $("error").textContent = "";
+    if (TOMTOM_KEY.indexOf("__") === 0) {
+      $("error").textContent = "Chýba TomTom kľúč. Stránka sa musí nasadiť cez GitHub Actions (secret TOMTOM_API_KEY2).";
+      return;
+    }
+    const btn = $("go");
+    btn.disabled = true;
+    btn.textContent = "Počítam...";
+    try {
+      const data = await analyze($("start").value.trim(), $("end").value.trim(), $("depart").value);
+      render(data);
+    } catch (e) {
+      $("result").style.display = "none";
+      $("error").textContent = e.message || String(e);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Skontrolovať trasu";
+    }
+  });
+</script>
+</body>
+</html>
